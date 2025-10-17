@@ -1,4 +1,4 @@
-# ♻️ Dynamic Venn–Euler Visualizer for Solvent Classification
+# ♻️ Dynamic Venn–Euler Visualizer for Green Vs Renewable Vs Low-Carbon solvents Classification
 
 A professional, **auto-adjusting Streamlit app** to visualize category overlaps dynamically using **Venn/Euler diagrams** — optimized for datasets like *Green / Renewable / Low-Carbon solvents*.
 
