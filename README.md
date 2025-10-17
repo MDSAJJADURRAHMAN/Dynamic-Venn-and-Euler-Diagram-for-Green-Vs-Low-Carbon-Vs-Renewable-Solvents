@@ -94,7 +94,7 @@ This version intelligently:
    ```
 3. Run the app:
    ```bash
-   streamlit run streamlit_app_1.py
+   streamlit run streamlit_app_2.py
    ```
 4. Select 2 or 3 categories and visualize overlaps.
 
