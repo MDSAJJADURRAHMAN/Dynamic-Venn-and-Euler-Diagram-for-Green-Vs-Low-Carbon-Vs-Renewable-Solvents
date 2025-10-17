@@ -1,425 +1,271 @@
-# streamlit_app.py — Final Version (with sidebar toggle and warning fixes)
+from pathlib import Path
+
+# Create ASCII-safe version with all Unicode characters escaped
+code = r'''# streamlit_app_2.py
+# Dynamic Venn–Euler Visualizer with conditional solvent highlighting
+# Colors: Green=green, Renewable=light pink/red, Low-Carbon=light grey
+# Conditional (\u2713) solvents shown with dashed outline
 
 import io
-from typing import Tuple, List, Set
+import math
+from typing import List, Set, Tuple
 import pandas as pd
-import requests
-import streamlit as st
 import plotly.graph_objects as go
-from streamlit_autorefresh import st_autorefresh
+import streamlit as st
 
-# -------------------------
-# App setup and sidebar toggle
-# -------------------------
-st.set_page_config(page_title="Dynamic Venn-Euler Visualizer", layout="centered")
+st.set_page_config(page_title="Dynamic Venn–Euler (Conditional Highlighting)", layout="centered")
+st.title("Dynamic Venn–Euler for Solvent Classification (Conditional Highlighting)")
 
-# --- Sidebar toggle button (slide animation) ---
-st.markdown("""
-    <style>
-        /* Floating sidebar button and animation */
-        .sidebar-toggle-btn {
-            position: fixed;
-            top: 18px;
-            left: 18px;
-            z-index: 9999;
-            background: #262730;
-            color: #fff;
-            border: none;
-            border-radius: 50%;
-            width: 44px;
-            height: 44px;
-            font-size: 22px;
-            box-shadow: 2px 2px 8px rgba(0,0,0,0.25);
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: background 0.2s;
-        }
-        .sidebar-toggle-btn:hover {
-            background: #40414a;
-        }
-        [data-testid="stSidebar"] {
-            transition: margin-left 0.4s cubic-bezier(.4,2,.6,1);
-        }
-        .sidebar-hidden [data-testid="stSidebar"] {
-            margin-left: -350px !important;
-        }
-    </style>
-    <script>
-        function toggleSidebarBtn() {
-            const root = parent.document.querySelector('.block-container');
-            if (root.classList.contains('sidebar-hidden')) {
-                root.classList.remove('sidebar-hidden');
-            } else {
-                root.classList.add('sidebar-hidden');
-            }
-        }
-    </script>
-""", unsafe_allow_html=True)
+st.markdown('''Upload one or two CSV files with columns like **Solvent, Green, Renewable, Low-Carbon**.
+- Recognizes three symbols: \\u2713 (confirmed), (\\u2713) (conditional), \\u2013 (fails)
+- Conditional solvents are drawn with dashed outlines and lighter shade.
+- Circle colors:
+  - Green = Green solvents
+  - Renewable = Light pink/red
+  - Low-Carbon = Light grey
+''')
 
-# Button for sidebar open/close (icon toggles)
-st.markdown('''
-    <button class="sidebar-toggle-btn" onclick="toggleSidebarBtn()" title="Show/hide controls">
-        <span id="sidebar-icon">☰</span>
-    </button>
-''', unsafe_allow_html=True)
+# -----------------------------
+# Helpers
+# -----------------------------
+def normalize_symbol(v):
+    """Return one of: 'yes', 'conditional', 'no'."""
+    s = str(v).strip().lower()
+    if s in {"\\u2713", "yes", "true", "y", "1", "x", "t"}:
+        return "yes"
+    if s in {"(\\u2713)", "(yes)", "(true)", "(y)", "(t)"}:
+        return "conditional"
+    if s in {"\\u2013", "-", "no", "false", "n", "0", ""}:
+        return "no"
+    return "no"
 
-# -------------------------
-# Constants
-# -------------------------
-TRUTHY = {"1", "true", "yes", "y", "x", "✓", "t"}
-
-
-# -------------------------
-# Function explanations (one-liners)
-# -------------------------
-# load_table_from_github_raw: Loads a CSV file from a GitHub raw URL into a DataFrame.
-# load_table_from_upload: Loads a CSV/XLSX file uploaded by the user into a DataFrame.
-# _to_bool_df_from_wide: Converts a wide-format DataFrame to boolean membership table.
-# interpret_table: Detects table format and returns a boolean membership table.
-# combine_two_tables: Combines two membership tables into one (union of categories).
-# compute_sets: Gets the set of items for each selected category.
-# draw_venn: Draws a Venn/Euler diagram for 3 selected categories using Plotly.
-
-def load_table_from_github_raw(url: str) -> pd.DataFrame:
-    """Loads a CSV file from a GitHub raw URL into a DataFrame."""
-    url = url.strip()
-    r = requests.get(url)
-    r.raise_for_status()
-    ct = r.headers.get("content-type", "").lower()
-    if url.endswith(".csv") or "text/csv" in ct:
+def read_csv_forgiving(file_or_bytes) -> pd.DataFrame:
+    for enc in ("utf-8-sig", "cp1252", "latin1"):
         try:
-            df = pd.read_csv(io.StringIO(r.text), encoding='utf-8-sig', skip_blank_lines=True, on_bad_lines='skip')
-            if df.empty or df.shape[1] < 1:
-                raise ValueError("CSV appears empty or invalid format.")
-            return df
-        except Exception as e:
-            raise ValueError(f"Failed to parse CSV: {e}")
-    else:
-        raise ValueError("Only CSV files are supported for remote fetch.")
+            if isinstance(file_or_bytes, (bytes, bytearray)):
+                return pd.read_csv(io.BytesIO(file_or_bytes), encoding=enc)
+            return pd.read_csv(file_or_bytes, encoding=enc)
+        except Exception:
+            continue
+    if isinstance(file_or_bytes, (bytes, bytearray)):
+        return pd.read_csv(io.BytesIO(file_or_bytes), encoding="utf-8", errors="replace")
+    return pd.read_csv(file_or_bytes, encoding="utf-8", errors="replace")
 
-def load_table_from_upload(uploaded_file) -> pd.DataFrame:
-    """Loads a CSV/XLSX file uploaded by the user into a DataFrame."""
-    name = uploaded_file.name.lower()
-    if name.endswith(".csv"):
-        return pd.read_csv(uploaded_file)
-    elif name.endswith((".xls", ".xlsx")):
-        return pd.read_excel(uploaded_file)
-    else:
-        try:
-            return pd.read_csv(uploaded_file)
-        except Exception as e:
-            raise ValueError("Unsupported file type") from e
-
-def _to_bool_df_from_wide(df: pd.DataFrame) -> pd.DataFrame:
-    """Converts a wide-format DataFrame to boolean membership table."""
-    if df.shape[1] < 2:
-        cols = list(df.columns)
-        preview = df.head().to_dict()
-        raise ValueError(f"Expected wide format with at least 2 columns (item + categories).\nDetected columns: {cols}\nPreview: {preview}")
-    first_col = df.columns[0]
-    rest = list(df.columns[1:])
-    converted = df[rest].apply(lambda col: col.astype(str).str.strip().str.lower().isin(TRUTHY))
-    converted[first_col] = df[first_col].astype(str)
-    grouped = converted.groupby(first_col, as_index=True).any()
-    return grouped.astype(bool)
-
-def interpret_table(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
-    """Detects table format and returns a boolean membership table."""
+def to_membership(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    if df.shape[1] == 2:
-        item_col, cat_col = df.columns[0], df.columns[1]
-        df = df[[item_col, cat_col]].dropna()
-        df_wide = pd.crosstab(df[item_col].astype(str), df[cat_col].astype(str)).astype(bool)
-        return df_wide.astype(bool), "long"
-    else:
-        membership = _to_bool_df_from_wide(df)
-        return membership.astype(bool), "wide"
+    cols = df.columns.tolist()
+    item_col = None
+    for c in cols:
+        if c.strip().lower() == "solvent":
+            item_col = c
+            break
+    if item_col is None:
+        item_col = cols[0]
+    cat_cols = [c for c in cols if c != item_col and c.strip().lower() not in ("short rationale","rationale")]
+    for c in cat_cols:
+        df[c] = df[c].apply(normalize_symbol)
+    df[item_col] = df[item_col].astype(str)
+    df = df[[item_col] + cat_cols].fillna("no")
+    df = df.groupby(item_col, as_index=True).agg(lambda x: "yes" if "yes" in x.values else ("conditional" if "conditional" in x.values else "no"))
+    return df
 
-def combine_two_tables(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
-    """Combines two membership tables into one (union of categories)."""
-    w1, _ = interpret_table(df1)
-    w2, _ = interpret_table(df2)
-    combined = pd.concat([w1, w2], axis=1)
-    combined = combined.infer_objects(copy=False).fillna(False)
-    combined = combined.T.groupby(level=0).any().T
-    return combined.infer_objects(copy=False).astype(bool)
+def merge_by_first3(base: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    base = base.copy()
+    new = new.copy()
+    base["__k"] = base.index.str.slice(0,3).str.lower()
+    new["__k"] = new.index.str.slice(0,3).str.lower()
 
-def compute_sets(membership_df: pd.DataFrame, selected_cats: List[str]) -> List[Set[str]]:
-    """Gets the set of items for each selected category."""
-    sets = []
-    for c in selected_cats:
-        if c not in membership_df.columns:
-            sets.append(set())
-        else:
-            members = set(membership_df.index[membership_df[c] == True].tolist())
-            sets.append(members)
-    return sets
+    cols = sorted(set(base.columns.tolist() + new.columns.tolist()) - {"__k"})
+    base = base.reindex(columns=cols, fill_value="no")
+    new = new.reindex(columns=cols, fill_value="no")
 
-def draw_venn(selected_cats: List[str], sets: List[Set[str]]):
-    """Draws a Venn/Euler diagram for 3 selected categories using Plotly."""
+    merged_rows = {}
+    for _, row in base.reset_index().set_index("__k").iterrows():
+        merged_rows[row.name] = row
+    for _, row in new.reset_index().set_index("__k").iterrows():
+        merged_rows[row.name] = row  # overwrite
+
+    merged = pd.DataFrame(merged_rows.values())
+    merged.index = [r["index"] if "index" in r else str(i) for i, r in merged.iterrows()]
+    merged = merged.drop(columns=["index","__k"], errors="ignore")
+    merged = merged.fillna("no")
+    return merged
+
+def compute_sets(df: pd.DataFrame, cats: List[str]) -> Tuple[List[Set[str]], List[Set[str]]]:
+    yes_sets = []
+    cond_sets = []
+    for c in cats:
+        yes_sets.append(set(df.index[df[c] == "yes"]))
+        cond_sets.append(set(df.index[df[c] == "conditional"]))
+    return yes_sets, cond_sets
+
+def safe_font(total_labels: int) -> int:
+    size = 18 - max(0, total_labels - 10) * 0.7
+    return int(max(11, min(20, size)))
+
+def venn_params_from_sizes(sets: List[Set[str]]) -> Tuple[List[float], List[Tuple[float,float]]]:
     n = len(sets)
-    if n == 3:
-        region_members = [
-            sets[0] - sets[1] - sets[2],
-            sets[1] - sets[0] - sets[2],
-            sets[2] - sets[0] - sets[1],
-            (sets[0] & sets[1]) - sets[2],
-            (sets[0] & sets[2]) - sets[1],
-            (sets[1] & sets[2]) - sets[0],
-            sets[0] & sets[1] & sets[2]
-        ]
-        colors = ['rgba(0,200,0,0.3)', 'rgba(255,0,200,0.3)', 'rgba(0,0,255,0.3)']
-        fig = go.Figure()
-        fig.add_shape(type="circle", xref="x", yref="y", x0=0, y0=0, x1=2, y1=2, fillcolor=colors[0], line_color=colors[0])
-        fig.add_shape(type="circle", xref="x", yref="y", x0=1, y0=0.7, x1=3, y1=2.7, fillcolor=colors[1], line_color=colors[1])
-        fig.add_shape(type="circle", xref="x", yref="y", x0=0.5, y0=1.2, x1=2.5, y1=3.2, fillcolor=colors[2], line_color=colors[2])
+    sizes = [len(s) for s in sets]
+    max_n = max(1, max(sizes))
+    radii = [0.8 + 0.9*math.sqrt(sz/max_n) for sz in sizes]
 
-        # Improved text placement: avoid overlap by spreading out text and limiting items per region
-        region_coords = [(0.5,0.5), (2.5,2.2), (1.5,3), (1,1.2), (1.2,2.5), (2,1.5), (1.5,2)]
-        region_names = [selected_cats[0], selected_cats[1], selected_cats[2],
-                        f"{selected_cats[0]} & {selected_cats[1]}",
-                        f"{selected_cats[0]} & {selected_cats[2]}",
-                        f"{selected_cats[1]} & {selected_cats[2]}",
-                        "All three"]
-        for (x, y), members, name in zip(region_coords, region_members, region_names):
-            if members:
-                # Limit to 5 items per region to avoid overlap, show count if more
-                sorted_members = sorted(members)
-                if len(sorted_members) > 5:
-                    text = '<br>'.join(sorted_members[:5]) + f'<br>...({len(sorted_members)} total)'
-                else:
-                    text = '<br>'.join(sorted_members)
-                fig.add_trace(go.Scatter(x=[x], y=[y], text=[text], mode='text', textfont=dict(size=14),
-                                         hovertext=[name + ':<br>' + ', '.join(sorted_members)], hoverinfo='text'))
-        # Category labels
-        fig.add_trace(go.Scatter(x=[0.2], y=[2.1], text=[selected_cats[0]], mode='text', textfont=dict(size=18, color='green')))
-        fig.add_trace(go.Scatter(x=[2.8], y=[2.8], text=[selected_cats[1]], mode='text', textfont=dict(size=18, color='magenta')))
-        fig.add_trace(go.Scatter(x=[1.5], y=[3.3], text=[selected_cats[2]], mode='text', textfont=dict(size=18, color='blue')))
-        fig.update_layout(showlegend=False, xaxis=dict(visible=False), yaxis=dict(visible=False),
-                          margin=dict(l=0, r=0, t=40, b=0), height=600, width=600,
-                          title=f"Venn/Euler Diagram: {', '.join(selected_cats)}")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Plotly Venn is only implemented for 3 sets.")
+    def jacc(a: Set[str], b: Set[str]) -> float:
+        if not a and not b: return 0.0
+        u = len(a|b)
+        if u==0: return 0.0
+        return len(a&b)/u
 
+    if n == 2:
+        j01 = jacc(sets[0], sets[1])
+        d01 = (radii[0] + radii[1]) * (1 - 0.7*j01)
+        centers = [(0,0), (d01, 0)]
+        return radii, centers
 
-# -------------------------
-# Streamlit UI
-# -------------------------
+    j01 = jacc(sets[0], sets[1])
+    j02 = jacc(sets[0], sets[2])
+    j12 = jacc(sets[1], sets[2])
 
-# --- Main Title and Description ---
-st.markdown("""
-<div style="display:flex;align-items:center;gap:16px;margin-bottom:0.5em">
-    <span style="font-size:2.2em;font-weight:700;letter-spacing:-1px;">Dynamic Venn–Euler Visualizer</span>
-    <span style="background:#e0e7ef;color:#1a1a1a;font-size:1.1em;padding:4px 12px;border-radius:8px;">Professional Edition</span>
-</div>
-<div style="font-size:1.1em;margin-bottom:1em;">
-    <b>Visualize set/category overlaps from your data in seconds.</b><br>
-    <ul style="margin:0 0 0 1.2em;padding:0;">
-        <li>Supports <b>wide</b> (items × category columns) and <b>long</b> (item, category) formats</li>
-        <li>Source: <b>upload files</b> or <b>GitHub Integration – Use raw URLs; auto-refresh every 10 seconds</b></li>
-        <li>Interactive sidebar for category selection and export</li>
-    </ul>
-</div>
-<hr style="margin:0.5em 0 1.2em 0;">
-""", unsafe_allow_html=True)
+    d01 = (radii[0] + radii[1]) * (1 - 0.7*j01)
+    d02 = (radii[0] + radii[2]) * (1 - 0.7*j02)
+    d12 = (radii[1] + radii[2]) * (1 - 0.7*j12)
 
-# Data source selection
+    x0,y0 = 0.0, 0.0
+    x1,y1 = d01, 0.0
+    x2 = (d02**2 - d12**2 + d01**2) / (2*d01 + 1e-6)
+    y2_sq = max(0.0, d02**2 - x2**2)
+    y2 = math.sqrt(y2_sq)
 
-# --- Tab-style input source selection ---
-st.markdown("""
-<style>
-.input-source-tabs {
-    display: flex;
-    gap: 0;
-    margin-bottom: 1.5em;
-    border-bottom: 2.5px solid #e0e7ef;
-    width: fit-content;
-}
-.input-source-tab {
-    background: #f5f7fa;
-    color: #1a7f37;
-    border: none;
-    border-bottom: 2.5px solid transparent;
-    border-radius: 10px 10px 0 0;
-    padding: 0.7em 2.2em 0.7em 2.2em;
-    font-size: 1.13em;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s, color 0.2s, border 0.2s;
-    outline: none;
-    margin-right: 2px;
-}
-.input-source-tab.selected {
-    background: #fff;
-    color: #222;
-    border-bottom: 2.5px solid #1a7f37;
-    box-shadow: 0 -2px 8px 0 rgba(26,127,55,0.04);
-    z-index: 2;
-}
-.input-source-tab:not(.selected):hover {
-    background: #e0e7ef;
-    color: #1a7f37;
-}
-</style>
-""", unsafe_allow_html=True)
+    centers = [(x0,y0),(x1,y1),(x2,y2)]
+    return radii, centers
 
+def draw_dynamic_venn(selected: List[str], yes_sets: List[Set[str]], cond_sets: List[Set[str]]):
+    n = len(yes_sets)
+    fig = go.Figure()
 
-if 'input_source' not in st.session_state:
-        st.session_state.input_source = 'Upload files'
+    radii, centers = venn_params_from_sizes(yes_sets)
 
+    colors = ["rgba(26,150,65,0.35)", "rgba(255,182,193,0.35)", "rgba(192,192,192,0.35)"]
 
+    for i in range(n):
+        cx, cy = centers[i]
+        r = radii[i]
+        fig.add_shape(
+            type="circle", xref="x", yref="y",
+            x0=cx - r, y0=cy - r, x1=cx + r, y1=cy + r,
+            fillcolor=colors[i], line=dict(color=colors[i], width=2)
+        )
+        if cond_sets[i]:
+            fig.add_shape(
+                type="circle", xref="x", yref="y",
+                x0=cx - r*0.95, y0=cy - r*0.95, x1=cx + r*0.95, y1=cy + r*0.95,
+                line=dict(color=colors[i].replace("0.35","0.65"), dash="dash", width=2),
+                fillcolor="rgba(0,0,0,0)"
+            )
 
+    total_labels = sum(len(s) for s in yes_sets)
+    fsize = safe_font(total_labels)
 
-# --- Tab-style input source selection with blue background for active tab ---
-tab_css = """
-<style>
-.tab-btn {
-  width: 100%;
-  padding: 0.7em 0;
-  font-size: 1.13em;
-  font-weight: 600;
-  border: none;
-  border-radius: 10px 10px 0 0;
-  margin-bottom: -2px;
-  background: #f5f7fa;
-  color: #1a1a1a;
-  transition: background 0.2s, color 0.2s;
-  cursor: pointer;
-}
-.tab-btn.active {
-  background: #2563eb !important;
-  color: #fff !important;
-  box-shadow: 0 -2px 8px 0 rgba(37,99,235,0.08);
-}
-</style>
-"""
-st.markdown(tab_css, unsafe_allow_html=True)
-tab1, tab2 = st.columns(2)
-with tab1:
-    if st.button('Upload files', key='tab_upload'):
-        st.session_state.input_source = 'Upload files'
-    st.markdown(f'<button class="tab-btn{ " active" if st.session_state.input_source=="Upload files" else "" }">Upload files</button>', unsafe_allow_html=True)
-with tab2:
-    if st.button('Fetch from GitHub raw URL', key='tab_github'):
-        st.session_state.input_source = 'Fetch from GitHub raw URL'
-    st.markdown(f'<button class="tab-btn{ " active" if st.session_state.input_source=="Fetch from GitHub raw URL" else "" }">Fetch from GitHub raw URL</button>', unsafe_allow_html=True)
+    for i, cat in enumerate(selected):
+        text_items = sorted(yes_sets[i] | cond_sets[i])
+        display_text = "<br>".join(text_items[:5])
+        if len(text_items) > 5:
+            display_text += f"<br>...({len(text_items)} total)"
+        cx, cy = centers[i]
+        fig.add_trace(go.Scatter(
+            x=[cx], y=[cy], mode="text", text=[display_text],
+            hovertext=f"{cat}: {len(yes_sets[i])} \\u2713 + {len(cond_sets[i])} (\\u2713)",
+            hoverinfo="text", textfont=dict(size=fsize, color="#222")
+        ))
+        fig.add_trace(go.Scatter(
+            x=[cx], y=[cy + radii[i] + 0.4], mode="text",
+            text=[cat], textfont=dict(size=max(16, fsize), color="#111")
+        ))
 
+    xs = [c[0] for c in centers]
+    ys = [c[1] for c in centers]
+    span = max([r for r in radii]+[1])
+    pad = 1.2*span
+    x_min, x_max = min(xs)-pad, max(xs)+pad
+    y_min, y_max = min(ys)-pad, max(ys)+pad
 
+    fig.update_layout(
+        title=f"Venn/Euler Diagram: {', '.join(selected)} (\\u2713 solid, (\\u2713) dashed)",
+        xaxis=dict(visible=False, range=[x_min, x_max]),
+        yaxis=dict(visible=False, range=[y_min, y_max]),
+        showlegend=False,
+        width=850, height=700, margin=dict(l=10,r=10,t=60,b=10)
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-source_option = st.session_state.input_source
-# Use session state to persist loaded data between tab switches
-if 'df_main' not in st.session_state:
-    st.session_state.df_main = None
-if 'df_second' not in st.session_state:
-    st.session_state.df_second = None
-df_main = st.session_state.df_main
-df_second = st.session_state.df_second
+# -----------------------------
+# Inputs
+# -----------------------------
+col1, col2 = st.columns(2)
+with col1:
+    f1 = st.file_uploader("Upload Table 1 (CSV)", type=["csv"], key="t1")
+with col2:
+    f2 = st.file_uploader("Upload Table 2 (CSV) — optional", type=["csv"], key="t2")
 
-if source_option == "Upload files":
-    st.info("Upload one or two files. If you upload two, they will be combined (union of categories).")
-    uploaded1 = st.file_uploader("Upload table 1 (CSV / XLSX)", type=["csv", "xls", "xlsx"], key="u1")
-    uploaded2 = st.file_uploader("Upload table 2 (CSV / XLSX) — optional", type=["csv", "xls", "xlsx"], key="u2")
-    if uploaded1:
-        try:
-            df_main = load_table_from_upload(uploaded1)
-            st.session_state.df_main = df_main
-            st.success("Table 1 loaded — head:")
-            st.dataframe(df_main.head())
-        except Exception as e:
-            st.error(f"Failed to load table 1: {e}")
-    if uploaded2:
-        try:
-            df_second = load_table_from_upload(uploaded2)
-            st.session_state.df_second = df_second
-            st.success("Table 2 loaded — head:")
-            st.dataframe(df_second.head())
-        except Exception as e:
-            st.error(f"Failed to load table 2: {e}")
-elif source_option == "Fetch from GitHub raw URL":
-    st.markdown("""
-        <b>GitHub Integration</b>: Enter <b>raw.githubusercontent.com</b> links for your CSV files.<br>
-        <span style='color:#1a7f37'>Auto-refresh</span> will check for updates every <b>10 seconds</b> if enabled.
-    """, unsafe_allow_html=True)
-    url1 = st.text_input("Raw URL for table 1 (required)")
-    url2 = st.text_input("Raw URL for table 2 (optional)")
-    auto_refresh = st.checkbox("Auto-refresh every 10 seconds (GitHub only)", value=False, key="autoref_checkbox")
-    refresh_count = 0
-    if auto_refresh:
-        refresh_count = st_autorefresh(interval=10000, limit=None, key="autoref10s")
-    st.write(f"<span style='color:#1a7f37'>Auto-refresh tick: {refresh_count}</span>", unsafe_allow_html=True)
-    if st.button("Fetch from URL(s)", key='fetch_btn') or auto_refresh:
-        try:
-            if url1:
-                with st.spinner("Fetching table 1..."):
-                    df_main = load_table_from_github_raw(url1)
-                    st.session_state.df_main = df_main
-                    st.success("Table 1 loaded — head:")
-                    st.dataframe(df_main.head())
-            if url2:
-                with st.spinner("Fetching table 2..."):
-                    df_second = load_table_from_github_raw(url2)
-                    st.session_state.df_second = df_second
-                    st.success("Table 2 loaded — head:")
-                    st.dataframe(df_second.head())
-        except Exception as e:
-            st.error(f"Failed to fetch: {e}")
+df1 = None
+df2 = None
 
-# Interpret tables
-membership_df = None
-if df_main is not None:
-    try:
-        if df_second is not None:
-            membership_df = combine_two_tables(df_main, df_second)
-            st.write("Combined membership table (items × categories):")
-            st.dataframe(membership_df.head())
-        else:
-            membership_df, fmt = interpret_table(df_main)
-            st.write(f"Membership table (items × categories) — detected format: {fmt}")
-            st.dataframe(membership_df.head())
-    except Exception as e:
-        st.error(f"Error interpreting tables: {e}")
-
-
-# Sidebar and visualization
-
-if membership_df is not None:
-    st.sidebar.header("Visualization Controls")
-    st.sidebar.markdown("<span style='font-size:1.1em;color:#1a7f37'><b>Step 1:</b></span> <b>Select categories</b>", unsafe_allow_html=True)
-    cats = membership_df.columns.tolist()
-    st.sidebar.markdown(f"<span style='color:#888'>{len(cats)} categories detected.</span>", unsafe_allow_html=True)
-    chosen = st.sidebar.multiselect("Select 2 or 3 categories to visualize", options=cats, default=cats[:3])
-    st.sidebar.markdown("<span style='font-size:1.1em;color:#1a7f37'><b>Step 2:</b></span> <b>Export or inspect</b>", unsafe_allow_html=True)
-    if len(chosen) not in (2, 3):
-        st.warning("Please select 2 or 3 categories (for venn2/venn3).")
-    else:
-        sets = compute_sets(membership_df, chosen)
-        st.subheader(":bar_chart: Venn/Euler Diagram")
-        draw_venn(chosen, sets)
-        if st.checkbox("Show members for selected categories"):
-            for cat, s in zip(chosen, sets):
-                st.write(f"**{cat}** ({len(s)} items):")
-                st.write(", ".join(sorted(s)) if s else "_No items_")
-        st.markdown("### Export")
-
-
-    try:
-        table2 = pd.read_csv("data/sample_table2.csv", encoding='utf-8-sig', skip_blank_lines=True, on_bad_lines='skip')
-        with st.expander("⚠️ Non-sustainable or conditional solvents", expanded=False):
-            st.write("These solvents fail one or more criteria. Major concerns are listed below.")
-            st.dataframe(table2)
-    except Exception as e:
-        st.warning(f"Could not load Table 2: {e}")
-
-    st.markdown("---")
-    st.header(":mag: Verification & Diagnostics")
-    st.markdown(f"- <b>Detected categories</b>: {len(membership_df.columns)}", unsafe_allow_html=True)
-    st.markdown(f"- <b>Detected items</b>: {len(membership_df.index)}", unsafe_allow_html=True)
-    if len(membership_df.columns) > 0:
-        counts = membership_df.sum(axis=0).sort_values(ascending=False)
-        st.dataframe(counts.reset_index().rename(columns={"index": "category", 0: "count"}))
-    st.markdown("<span style='color:#1a7f37'>Update the source files or use auto-refresh to verify diagram updates automatically.</span>", unsafe_allow_html=True)
+if f1 is not None:
+    df1 = read_csv_forgiving(f1)
 else:
-    st.info("Please load a table (upload or fetch) to continue.")
+    for fallback in ["solvent_classification_table1.csv", "Test Set 2.csv"]:
+        try:
+            df1 = pd.read_csv(fallback, encoding='utf-8-sig')
+            break
+        except Exception:
+            continue
+
+if f2 is not None:
+    df2 = read_csv_forgiving(f2)
+else:
+    for fallback in ["solvent_table2_testdata.csv", "toxic_solvents_testset3.csv"]:
+        try:
+            df2 = pd.read_csv(fallback, encoding='utf-8-sig')
+            break
+        except Exception:
+            continue
+
+if df1 is None:
+    st.warning("Please upload at least one CSV to proceed.")
+    st.stop()
+
+st.subheader("Data Preview")
+st.dataframe(df1.head())
+if df2 is not None:
+    st.dataframe(df2.head())
+
+m1 = to_membership(df1)
+if df2 is not None:
+    m2 = to_membership(df2)
+    membership = merge_by_first3(m1, m2)
+else:
+    membership = m1
+
+st.markdown("### Normalized membership (\\u2713 = confirmed, (\\u2713) = conditional, \\u2013 = no)")
+st.dataframe(membership)
+
+cats = [c for c in membership.columns if c.strip().lower() not in ("solvent","short rationale","rationale")]
+default_sel = cats[:3] if len(cats)>=3 else cats
+selected = st.multiselect("Select 2 or 3 categories", cats, default=default_sel)
+
+if len(selected) not in (2,3):
+    st.info("Select exactly 2 or 3 categories to draw Venn/Euler.")
+else:
+    yes_sets, cond_sets = compute_sets(membership, selected)
+    draw_dynamic_venn(selected, yes_sets, cond_sets)
+
+    st.markdown("#### Category counts")
+    counts = pd.DataFrame({
+        "\\u2713 confirmed": [len(s) for s in yes_sets],
+        "(\\u2713) conditional": [len(s) for s in cond_sets]
+    }, index=selected)
+    st.table(counts)
+'''
+
+path = "/mnt/data/streamlit_app_2.py"
+Path(path).write_text(code, encoding="utf-8")
+path
