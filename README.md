@@ -38,7 +38,7 @@ This version intelligently:
 
 2. **Run the app**
    ```bash
-   streamlit run streamlit_app_2.py
+   streamlit run streamlit_GRL_app.py
    ```
 
 3. **Upload or use default data**
@@ -53,7 +53,7 @@ This version intelligently:
 2. Sign in with your GitHub account.
 3. Create a new app and select this repo.
 4. Set:
-   - **Main file path**: `streamlit_app_2.py`
+   - **Main file path**: `streamlit_GRL_app.py`
    - **Branch**: `main`
    - **Requirements file**: `requirements.txt`
 5. Click **Deploy** — your app will be live in seconds!
@@ -94,7 +94,7 @@ This version intelligently:
    ```
 3. Run the app:
    ```bash
-   streamlit run streamlit_app_2.py
+   streamlit run streamlit_GRL_app.py
    ```
 4. Select 2 or 3 categories and visualize overlaps.
 
