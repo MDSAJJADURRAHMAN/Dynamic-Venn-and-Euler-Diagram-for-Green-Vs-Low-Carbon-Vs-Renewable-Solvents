@@ -34,7 +34,7 @@ st.markdown("""
 <div style='font-size:1.1rem; color:#333; margin-bottom:1.2em;'>
 Upload one or two CSV files with columns like <b>Solvent, Green, Renewable, Low-Carbon</b>.<br>
 <ul>
-<li>Recognizes three symbols: ✓ (confirmed), (✓) (conditional), – (fails)</li>
+<li>Recognizes three symbols: ✓ (confirmed or meets criterion), (✓) (conditionally meets criterion), – (fails to meet criterion)</li>
 <li>Conditional solvents are drawn with dashed outlines and lighter shade.</li>
 <li>Modern 3D-style interface with dropdowns for each classification.</li>
 </ul>
@@ -308,4 +308,5 @@ else:
         "(✓) conditional": [len(s) for s in cond_sets]
     }, index=selected)
     st.table(counts)
+
 
