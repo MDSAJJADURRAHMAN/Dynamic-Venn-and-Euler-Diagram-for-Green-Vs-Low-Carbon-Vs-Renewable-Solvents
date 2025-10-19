@@ -29,7 +29,7 @@ st.markdown(
         """,
         unsafe_allow_html=True,
 )
-st.title("♻️ Dynamic Venn–Euler for Solvent Classification (3D UI)")
+st.title("♻️ Dynamic Venn–Euler for Green Vs Renewable Vs Low-Carbon Solvent Classification (3D UI)")
 st.markdown("""
 <div style='font-size:1.1rem; color:#333; margin-bottom:1.2em;'>
 Upload one or two CSV files with columns like <b>Solvent, Green, Renewable, Low-Carbon</b>.<br>
@@ -308,3 +308,4 @@ else:
         "(✓) conditional": [len(s) for s in cond_sets]
     }, index=selected)
     st.table(counts)
+
