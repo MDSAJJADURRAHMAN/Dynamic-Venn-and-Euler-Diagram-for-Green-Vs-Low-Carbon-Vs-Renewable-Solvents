@@ -158,9 +158,9 @@ def draw_dynamic_venn(selected: List[str], yes_sets: List[Set[str]], cond_sets: 
     radii, centers = venn_params_from_sizes(yes_sets)
     # 3D-style colors and shadows
     colors = [
-        "rgba(26,150,65,0.45)",      # Low-carbon
+        "rgba(26,150,65,0.45)",      # Green
         "rgba(255,182,193,0.45)",    # Renewable
-        "rgba(192,192,192,0.45)"     # Green
+        "rgba(192,192,192,0.45)"     # Low-Carbon
     ]
     shadow_colors = [
         "rgba(26,150,65,0.10)",
@@ -308,6 +308,7 @@ else:
         "(✓) conditional": [len(s) for s in cond_sets]
     }, index=selected)
     st.table(counts)
+
 
 
 
