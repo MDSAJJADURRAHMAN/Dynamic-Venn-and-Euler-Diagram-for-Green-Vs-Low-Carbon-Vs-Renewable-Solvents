@@ -156,17 +156,29 @@ def draw_dynamic_venn(selected: List[str], yes_sets: List[Set[str]], cond_sets: 
     n = len(yes_sets)
     fig = go.Figure()
     radii, centers = venn_params_from_sizes(yes_sets)
-    # 3D-style colors and shadows
-    colors = [
-        "rgba(26,150,65,0.45)",      # Green
-        "rgba(255,182,193,0.45)",    # Renewable
-        "rgba(192,192,192,0.45)"     # Low-Carbon
-    ]
-    shadow_colors = [
-        "rgba(26,150,65,0.10)",
-        "rgba(255,182,193,0.10)",
-        "rgba(192,192,192,0.10)"
-    ]
+    # 3D-style colors and shadows - mapped by category name
+    color_map = {
+        "Green": ("rgba(26,150,65,0.45)", "rgba(26,150,65,0.10)"),      # Green
+        "Renewable": ("rgba(255,182,193,0.45)", "rgba(255,182,193,0.10)"),    # Pink/Rose
+        "Low-Carbon": ("rgba(192,192,192,0.45)", "rgba(192,192,192,0.10)")     # Gray
+    }
+    # Assign colors based on actual category names
+    colors = []
+    shadow_colors = []
+    for cat in selected:
+        # Match category name (case-insensitive and flexible)
+        cat_lower = cat.strip().lower()
+        if "green" in cat_lower:
+            c, s = color_map["Green"]
+        elif "renewable" in cat_lower:
+            c, s = color_map["Renewable"]
+        elif "low" in cat_lower and "carbon" in cat_lower:
+            c, s = color_map["Low-Carbon"]
+        else:
+            # Default fallback colors if category doesn't match
+            c, s = "rgba(100,100,200,0.45)", "rgba(100,100,200,0.10)"
+        colors.append(c)
+        shadow_colors.append(s)
     # Draw shadow for 3D effect
     for i in range(n):
         cx, cy = centers[i]
@@ -224,11 +236,7 @@ def draw_dynamic_venn(selected: List[str], yes_sets: List[Set[str]], cond_sets: 
         fig.add_trace(go.Scatter(x=[cx], y=[cy], mode="text", text=[display_text],
                                  hovertext=f"{cat}: {len(yes_sets[i])} ✓ + {len(cond_sets[i])} (✓)",
                                  hoverinfo="text", textfont=dict(size=fsize, color="#222")))
-        # Main label outside, aligned to window border
-        lx, ly = cx + label_offsets[i][0], cy + label_offsets[i][1]
-        fig.add_trace(go.Scatter(x=[lx], y=[ly], mode="text",
-                                 text=[cat], textfont=dict(size=max(18, fsize+2), color="#111", family="Segoe UI,Arial"),
-                                 textposition="middle center"))
+        # (Removed) main outside label - we'll render a top legend instead so labels don't overlap the circles
     xs = [c[0] for c in centers]
     ys = [c[1] for c in centers]
     span = max([r for r in radii]+[1])
@@ -246,6 +254,16 @@ def draw_dynamic_venn(selected: List[str], yes_sets: List[Set[str]], cond_sets: 
         hoverlabel=dict(bgcolor="#fff", font_size=16, font_family="Segoe UI,Arial"),
         transition={'duration': 500, 'easing': 'cubic-in-out'}
     )
+    # Render a compact legend at the top showing which color maps to which category
+    legend_items = []
+    for i, cat in enumerate(selected):
+        outline = colors[i].replace("0.45", "0.85") if i < len(colors) else "rgba(100,100,200,0.85)"
+        # colored pill + label
+        pill = f"<span style='display:inline-block;width:14px;height:12px;background:{outline};border-radius:3px;margin-right:8px;vertical-align:middle;box-shadow:0 1px 2px rgba(0,0,0,0.08);'></span>"
+        label_html = f"<span style='margin-right:18px;color:{outline};font-weight:600;vertical-align:middle;'>{cat}</span>"
+        legend_items.append(pill + label_html)
+    legend_html = "<div style='text-align:center;margin-bottom:10px;'>" + "".join(legend_items) + "</div>"
+    st.markdown(legend_html, unsafe_allow_html=True)
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
